@@ -5,28 +5,38 @@ resource "google_cloud_run_service" "collector" {
   template {
     metadata {
       annotations = {
-        "config-hash" = sha256(file("${path.module}/otel-config.yaml"))
+        "config-hash"                          = sha256(file("${path.module}/otel-config.yaml"))
+        "autoscaling.knative.dev/minScale"     = "1"
+        "autoscaling.knative.dev/maxScale"     = "100"
+        "run.googleapis.com/startup-cpu-boost" = "true"
       }
     }
     spec {
       service_account_name = google_service_account.collector.email
-      
+
       containers {
         image = local.collector_image
-        
+
         ports {
           name           = "http1"
           container_port = 4318
         }
-        
-        args = ["--config=/etc/otel/config.yaml"] # Path to mounted config
+
+        args = ["--config=/etc/otel/config.yaml"]
+
+        resources {
+          limits = {
+            cpu    = "1000m"
+            memory = "512Mi"
+          }
+        }
 
         volume_mounts {
           name       = "config-volume"
           mount_path = "/etc/otel"
         }
       }
-      
+
       volumes {
         name = "config-volume"
         secret {

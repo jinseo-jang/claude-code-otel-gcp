@@ -1,81 +1,120 @@
 # Claude Code Setup Guide: OpenTelemetry on GCP
 
-This guide outlines the steps to configure Claude Code on your GCP VM to send OpenTelemetry data to the Cloud Run Collector.
+This guide outlines the steps to configure Claude Code to send OpenTelemetry data to the Cloud Run Collector.
+
+## Prerequisites
+
+- GCP project with the OTel Collector deployed on Cloud Run (see Terraform in this repo)
+- `gcloud` CLI installed and authenticated (`gcloud auth login`)
+- Claude Code installed (`npm install -g @anthropic-ai/claude-code`)
+- `roles/run.invoker` granted on the Collector Cloud Run service for your identity
 
 ## 1. Directory Setup
-Ensure the configuration directory exists:
+
 ```bash
 mkdir -p ~/.claude
 ```
 
-## 2. Dynamic Headers Script
-Create a script to dynamically generate the authentication token utilizing your existing GCP credentials (ADC/VM Service Account).
+## 2. Authentication Headers Script
 
-Create file: `~/.claude/generate_otel_headers.sh`
+Create `~/.claude/generate_otel_headers.sh`:
+
 ```bash
 #!/bin/bash
-# Try gcloud first (works if user is logged in)
-TOKEN=$(gcloud auth print-identity-token --audiences="https://<collector-cloud-run-url>" 2>/dev/null)
-
-if [ -z "$TOKEN" ]; then
-  # Try metadata server (works if using VM Service Account)
-  TOKEN=$(curl -s -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity?audience=https://<collector-cloud-run-url>" 2>/dev/null)
-fi
-
+set -e
+TOKEN=$(gcloud auth print-identity-token 2>/dev/null)
 if [ -n "$TOKEN" ]; then
-    echo "{\"Authorization\": \"Bearer $TOKEN\"}"
-else
-    # Fallback or error
-    echo "{}"
+  echo "{\"Authorization\": \"Bearer $TOKEN\"}"
 fi
 ```
-Make the script executable:
+
+> **IMPORTANT**: The script MUST output a **JSON object** with string key-value pairs.
+> Claude Code internally calls `JSON.parse()` on the script output. Plain text like
+> `Authorization: Bearer <token>` will cause a parse error and **silently disable
+> all telemetry export**.
+
+Make it executable:
+
 ```bash
 chmod +x ~/.claude/generate_otel_headers.sh
 ```
 
-## 3. Claude Code Settings
-Configure Claude Code to use the dynamic headers script.
+Verify it outputs valid JSON:
 
-Update/Create file: `~/.claude/settings.json` (or `.claude/settings.json` in your project root)
+```bash
+~/.claude/generate_otel_headers.sh | python3 -c "import sys,json; json.load(sys.stdin); print('OK')"
+```
+
+## 3. Claude Code Settings
+
+Add the following to `~/.claude/settings.json`. Using the `env` block in settings.json
+is preferred over `.bashrc` because it ensures the variables are always set regardless
+of how Claude Code is launched (terminal, VS Code, etc.).
+
 ```json
 {
-  "otelHeadersHelper": "~/.claude/generate_otel_headers.sh"
+  "env": {
+    "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
+    "OTEL_METRICS_EXPORTER": "otlp",
+    "OTEL_LOGS_EXPORTER": "otlp",
+    "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",
+    "OTEL_EXPORTER_OTLP_ENDPOINT": "https://<collector-cloud-run-url>",
+    "OTEL_METRICS_INCLUDE_SESSION_ID": "true",
+    "OTEL_METRICS_INCLUDE_VERSION": "true",
+    "OTEL_METRICS_INCLUDE_ACCOUNT_UUID": "true",
+    "OTEL_LOG_USER_PROMPTS": "1",
+    "OTEL_LOG_TOOL_DETAILS": "1",
+    "OTEL_METRIC_EXPORT_INTERVAL": "1000"
+  },
+  "otelHeadersHelper": "/absolute/path/to/.claude/generate_otel_headers.sh"
 }
 ```
 
-## 4. Environment Variables
-Set the environment variables to enable telemetry and route it to the Cloud Run Collector.
+> **Notes**:
+> - `OTEL_EXPORTER_OTLP_PROTOCOL` must be `http/protobuf`. Claude Code's OTLP SDK uses HTTP, not gRPC.
+> - `otelHeadersHelper` must be an **absolute path** (not `~/.claude/...`).
+> - `OTEL_METRIC_EXPORT_INTERVAL` is in milliseconds. `1000` = every 1 second (useful for verification; increase to `60000` for production).
 
-Add these to your `~/.bashrc` (or run them in your terminal before starting Claude Code):
+## 4. Verification
+
+### 4.1 Restart Claude Code
+
+After updating settings, **restart Claude Code** for changes to take effect.
+
+### 4.2 Check Collector Receives Data
 
 ```bash
-# Enable telemetry export
-export CLAUDE_CODE_ENABLE_TELEMETRY=1
-
-# Exporters
-export OTEL_METRICS_EXPORTER=otlp
-export OTEL_LOGS_EXPORTER=otlp
-
-# OTLP Endpoint (Cloud Run Collector)
-export OTEL_EXPORTER_OTLP_PROTOCOL=grpc # or http/json if configured
-export OTEL_EXPORTER_OTLP_ENDPOINT=https://<collector-cloud-run-url>
-
-# Full Data Collection
-export OTEL_METRICS_INCLUDE_SESSION_ID=true
-export OTEL_METRICS_INCLUDE_VERSION=true
-export OTEL_METRICS_INCLUDE_ACCOUNT_UUID=true
-export OTEL_LOG_USER_PROMPTS=1
-export OTEL_LOG_TOOL_DETAILS=1
-
-# Optional: Reduce export interval for faster verification
-export OTEL_METRIC_EXPORT_INTERVAL=10000
-export OTEL_LOGS_EXPORT_INTERVAL=5000
+gcloud logging read \
+  'resource.type="cloud_run_revision" AND resource.labels.service_name="claude-code-otel-collector" AND httpRequest.requestUrl:"/v1/"' \
+  --project=<PROJECT_ID> --limit=10 \
+  --format="table(timestamp,httpRequest.status,httpRequest.requestUrl,httpRequest.userAgent)"
 ```
 
-## 5. Verification
-After deploying the collector (Phase 1), you can verify the setup by running:
+Look for requests with User-Agent `OTel-OTLP-Exporter-JavaScript/*` and status `200`.
+
+### 4.3 Check Cloud Logging
+
 ```bash
-claude --help
+gcloud logging read \
+  'logName="projects/<PROJECT_ID>/logs/opentelemetry-collector"' \
+  --project=<PROJECT_ID> --limit=5 --format=json
 ```
-Then check the Cloud Run logs to see if requests were received.
+
+Expected log entries: `claude_code.user_prompt`, `claude_code.api_request`, `claude_code.tool_result`.
+
+### 4.4 Check Cloud Monitoring Metrics
+
+In GCP Console > Cloud Monitoring > Metrics Explorer, search for:
+
+| Metric Name | Description |
+|---|---|
+| `prometheus.googleapis.com/claude_code_cost_usage_USD_total/counter` | Cost (USD) |
+| `prometheus.googleapis.com/claude_code_token_usage_tokens_total/counter` | Token usage |
+| `prometheus.googleapis.com/claude_code_session_count_total/counter` | Session count |
+| `prometheus.googleapis.com/claude_code_active_time_seconds_total/counter` | Active time |
+| `prometheus.googleapis.com/claude_code_lines_of_code_count_total/counter` | Lines of code |
+| `prometheus.googleapis.com/claude_code_code_edit_tool_decision_total/counter` | Code edit decisions |
+
+## Troubleshooting
+
+See [troubleshooting.md](troubleshooting.md) for common issues and solutions.

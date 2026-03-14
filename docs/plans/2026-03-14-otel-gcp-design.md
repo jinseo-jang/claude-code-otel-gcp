@@ -1,22 +1,22 @@
 # Design: OpenTelemetry Integration with GCP for Claude Code
 
 ## Overview
-This design outlines the architecture and configuration to send OpenTelemetry (otel) data from Claude Code to Google Cloud Platform (GCP) for visualization. 
+
+This design outlines the architecture and configuration to send OpenTelemetry (OTel) data from Claude Code to Google Cloud Platform (GCP) for monitoring and visualization.
 
 ## Architecture
-The solution involves a centralized OpenTelemetry Collector deployed on Cloud Run, acting as a gateway. Claude Code (running on a GCP VM) will be configured to send its telemetry data to this collector. The collector will then route the data to the appropriate GCP services: Google Cloud Managed Service for Prometheus (for metrics) and Cloud Logging (for logs).
+
+Claude Code exports telemetry via OTLP/HTTP to a centralized OpenTelemetry Collector on Cloud Run. The Collector routes metrics to Google Cloud Managed Service for Prometheus (GMP) and logs to Cloud Logging.
 
 > [!IMPORTANT]
-> **GKE (Google Kubernetes Engine) is NOT required** for this setup. GMP is a managed service, and the Cloud Run collector can send data to it directly.
+> **GKE is NOT required.** GMP is a managed service. The Cloud Run Collector writes to it directly via the `googlemanagedprometheus` exporter.
 
 ```mermaid
 graph LR
-    SubGraph_1(GCP VM - Ubuntu Desktop)
-    ClaudeCode[Claude Code CLI] -->|OTLP/HTTPS| CloudRun[Otel Collector on Cloud Run]
-    
-    SubGraph_2(GCP Project: duper-project-1)
-    CloudRun -->|Write| GMP[Managed Service for Prometheus]
-    CloudRun -->|Write| CloudLogging[Cloud Logging]
+    ClaudeCode[Claude Code CLI] -->|OTLP/HTTP protobuf| CloudRun[OTel Collector on Cloud Run]
+
+    CloudRun -->|googlemanagedprometheus| GMP[Cloud Monitoring / GMP]
+    CloudRun -->|googlecloud| CloudLogging[Cloud Logging]
 
     classDef gcp fill:#4285F4,stroke:#333,stroke-width:2px,color:#fff;
     class GMP,CloudLogging,CloudRun gcp;
@@ -25,152 +25,159 @@ graph LR
 ## Components
 
 ### 1. Claude Code Configuration
-Claude Code will be configured to enable telemetry and export metrics and logs to the Cloud Run collector's endpoint.
 
-**Environment Variables:**
-*   `CLAUDE_CODE_ENABLE_TELEMETRY=1`
-*   `OTEL_METRICS_EXPORTER=otlp`
-*   `OTEL_LOGS_EXPORTER=otlp`
-*   `OTEL_EXPORTER_OTLP_PROTOCOL=grpc` (or `http/json`)
-*   `OTEL_EXPORTER_OTLP_ENDPOINT=https://<collector-cloud-run-url>`
-*   `OTEL_EXPORTER_OTLP_HEADERS`: Will be dynamically set using the `otelHeadersHelper`.
-*   **추가 설정 (모든 데이터 수집)**:
-    *   `OTEL_METRICS_INCLUDE_SESSION_ID=true`
-    *   `OTEL_METRICS_INCLUDE_VERSION=true`
-    *   `OTEL_METRICS_INCLUDE_ACCOUNT_UUID=true`
-    *   `OTEL_LOG_USER_PROMPTS=1` (유저 프롬프트 내용 포함)
-    *   `OTEL_LOG_TOOL_DETAILS=1` (도구 실행 상세 내용 포함)
-    *   `OTEL_METRIC_EXPORT_INTERVAL=10000` (디버깅/확인용, 선택사항)
+**Protocol**: `http/protobuf` (Claude Code's OTLP SDK uses HTTP, not gRPC)
 
-**Dynamic Headers Helper:**
-A script will be created at `~/.claude/generate_otel_headers.sh` (or a similar path) to generate the required `Authorization` header. Since Claude Code is running on a GCP VM and using ADC, we can generate the token robustly.
+**Environment Variables** (set via `~/.claude/settings.json` `env` block):
+
+| Variable | Value | Notes |
+|---|---|---|
+| `CLAUDE_CODE_ENABLE_TELEMETRY` | `1` | Required to enable export |
+| `OTEL_METRICS_EXPORTER` | `otlp` | |
+| `OTEL_LOGS_EXPORTER` | `otlp` | |
+| `OTEL_EXPORTER_OTLP_PROTOCOL` | `http/protobuf` | Must be HTTP, not gRPC |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `https://<collector-url>` | Cloud Run URL |
+| `OTEL_METRICS_INCLUDE_SESSION_ID` | `true` | |
+| `OTEL_METRICS_INCLUDE_VERSION` | `true` | |
+| `OTEL_METRICS_INCLUDE_ACCOUNT_UUID` | `true` | |
+| `OTEL_LOG_USER_PROMPTS` | `1` | Include prompt content in logs |
+| `OTEL_LOG_TOOL_DETAILS` | `1` | Include tool execution details |
+| `OTEL_METRIC_EXPORT_INTERVAL` | `1000` | Export every 1s (ms) |
+
+**Dynamic Headers Helper** (`~/.claude/generate_otel_headers.sh`):
 
 ```bash
 #!/bin/bash
-# Try gcloud first (works if user is logged in)
-TOKEN=$(gcloud auth print-identity-token --audiences="https://<collector-cloud-run-url>" 2>/dev/null)
-
-if [ -z "$TOKEN" ]; then
-  # Try metadata server (works if using VM Service Account)
-  TOKEN=$(curl -s -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity?audience=https://<collector-cloud-run-url>" 2>/dev/null)
-fi
-
+set -e
+TOKEN=$(gcloud auth print-identity-token 2>/dev/null)
 if [ -n "$TOKEN" ]; then
-    echo "{\"Authorization\": \"Bearer $TOKEN\"}"
-else
-    # Fallback or error
-    echo "{}"
+  echo "{\"Authorization\": \"Bearer $TOKEN\"}"
 fi
 ```
-This requires configuring `.claude/settings.json`:
+
+> [!CAUTION]
+> The script **MUST output valid JSON**. Claude Code calls `JSON.parse()` on the output.
+> Plain text output (e.g., `Authorization: Bearer <token>`) causes a silent failure
+> that completely disables telemetry export. See [troubleshooting.md](troubleshooting.md).
+
+Configure in `~/.claude/settings.json`:
 ```json
 {
-  "otelHeadersHelper": "~/.claude/generate_otel_headers.sh"
+  "otelHeadersHelper": "/home/<user>/.claude/generate_otel_headers.sh"
 }
 ```
 
 ### 2. OpenTelemetry Collector (Cloud Run)
-We will use the official Google-Built OpenTelemetry Collector image: `us-docker.pkg.dev/cloud-ops-agents-artifacts/google-cloud-opentelemetry-collector/otelcol-google`.
 
-**Deployment:**
-*   **Platform**: Cloud Run
-*   **Authentication**: "Require authentication" (secured by IAM). Only users or service accounts with the `roles/run.invoker` role on the service can send data.
-*   **Configuration**: The collector configuration (`config.yaml`) will be stored in Secret Manager and mounted as a volume.
+**Image**: `us-docker.pkg.dev/cloud-ops-agents-artifacts/google-cloud-opentelemetry-collector/otelcol-google:0.144.0`
 
-**Collector Configuration (`config.yaml`):**
+**Deployment**:
+- **Platform**: Cloud Run
+- **Port**: 4318 (OTLP HTTP)
+- **Authentication**: IAM-secured (require authentication)
+- **Min instances**: 1 (prevents cold start data loss)
+- **CPU boost**: Enabled (faster startup)
+- **Configuration**: Stored in Secret Manager, mounted as volume
+
+**Collector Configuration** (`otel-config.yaml`):
+
 ```yaml
 receivers:
   otlp:
     protocols:
-      grpc:
       http:
+        cors:
+          allowed_origins:
+            - http://*
+            - https://*
+        endpoint: 0.0.0.0:4318
 
 processors:
   batch:
-  resource:
-    attributes:
-      - key: service.name
-        value: claude-code
-        action: upsert
+    send_batch_max_size: 200
+    send_batch_size: 200
+    timeout: 5s
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 65
+    spike_limit_percentage: 20
+  resourcedetection:
+    detectors: [gcp]
+    timeout: 10s
+  transform/collision:
+    metric_statements:
+      - context: datapoint
+        statements:
+          - set(attributes["exported_location"], attributes["location"])
+          - delete_key(attributes, "location")
+          - set(attributes["exported_cluster"], attributes["cluster"])
+          - delete_key(attributes, "cluster")
+          - set(attributes["exported_namespace"], attributes["namespace"])
+          - delete_key(attributes, "namespace")
+          - set(attributes["exported_job"], attributes["job"])
+          - delete_key(attributes, "job")
+          - set(attributes["exported_instance"], attributes["instance"])
+          - delete_key(attributes, "instance")
+          - set(attributes["exported_project_id"], attributes["project_id"])
+          - delete_key(attributes, "project_id")
 
 exporters:
-  # Using googlemanagedprometheus for explicit GMP support
   googlemanagedprometheus:
-  # Using googlecloud for standard GCP exporting (logs, traces)
   googlecloud:
+    log:
+      default_log_name: opentelemetry-collector
+  debug:
+    verbosity: detailed
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
 
 service:
+  extensions: [health_check]
   pipelines:
     metrics:
       receivers: [otlp]
-      processors: [batch, resource]
-      exporters: [googlemanagedprometheus]
+      processors: [resourcedetection, transform/collision, memory_limiter, batch]
+      exporters: [googlemanagedprometheus, debug]
     logs:
       receivers: [otlp]
-      processors: [batch, resource]
-      exporters: [googlecloud]
+      processors: [resourcedetection, memory_limiter, batch]
+      exporters: [googlecloud, debug]
 ```
 
+Key design decisions:
+- **No gRPC receiver**: Claude Code only uses HTTP. Removing gRPC avoids port conflict on Cloud Run.
+- **`transform/collision` processor**: Renames GCP-reserved metric attributes (`location`, `cluster`, `namespace`, etc.) to `exported_*` to prevent conflicts with `googlemanagedprometheus`.
+- **`resourcedetection` processor**: Auto-detects GCP metadata (project, region, instance).
+- **`debug` exporter**: Included for troubleshooting. Can be removed in production.
+
 ### 3. IAM Permissions
-*   **Cloud Run Service Account**:
-    *   `roles/monitoring.metricWriter` (for writing metrics)
-    *   `roles/logging.logWriter` (for writing logs)
-*   **Users running Claude Code**:
-    *   `roles/run.invoker` on the Collector Cloud Run service.
 
-## Detailed Verification Plan
+| Principal | Role | Purpose |
+|---|---|---|
+| Collector SA | `roles/monitoring.metricWriter` | Write metrics to GMP |
+| Collector SA | `roles/logging.logWriter` | Write logs to Cloud Logging |
+| Collector SA | `roles/secretmanager.secretAccessor` | Read collector config |
+| Users/SAs running Claude Code | `roles/run.invoker` | Invoke Cloud Run endpoint |
 
-### 1. Collector Deployment Verification
-*   **Step 1**: After running `terraform apply`, check the Cloud Run service status in the GCP Console (`duper-project-1`).
-*   **Step 2**: Check Cloud Run logs for successful startup:
-    *   Look for "Everything is ready. Begin running and processing data."
-    *   Verify receivers are started: "Receiver is starting... (otlp)".
-*   **Step 3**: (Optional) Test the endpoint from the VM using `curl`.
-    *   `curl -i https://<collector-cloud-run-url>`
-    *   *Expected*: Should return `401 Unauthorized` or `403 Forbidden` if secured by IAM, confirming the endpoint is active but protected.
+## Collected Data
 
-### 2. Claude Code Authentication Verification
-*   **Step 1**: Manually run the `generate_otel_headers.sh` script on the VM.
-    *   `~/.claude/generate_otel_headers.sh`
-    *   *Expected*: Output should be a JSON object containing the `Authorization` header with a Bearer token.
-*   **Step 2**: Verify the token is valid for the Cloud Run audience.
-    *   Run `gcloud auth print-identity-token --audiences="https://<collector-cloud-run-url>"` separately and compare.
+### Cloud Logging (`logName: opentelemetry-collector`)
 
-### 3. End-to-End Integration Verification
-*   **Step 1**: Configure Claude Code with the environment variables and `settings.json` (as detailed in Components).
-*   **Step 2**: Run a simple Claude Code command (e.g., `claude --help` or ask a simple question).
-*   **Step 3**: Check Cloud Run logs for incoming requests.
-    *   *Expected*: You should see OTLP export requests being processed.
-*   **Step 4**: Check Cloud Run logs for successful exports to GCP backends.
-    *   Look for logs from `googlemanagedprometheus` and `googlecloud` exporters.
+| Event | Key Fields |
+|---|---|
+| `claude_code.user_prompt` | `prompt`, `prompt_length`, `session.id` |
+| `claude_code.api_request` | `model`, `input_tokens`, `output_tokens`, `cost_usd`, `duration_ms` |
+| `claude_code.tool_result` | `tool_name`, `success`, `duration_ms` |
 
-### 4. GCP Visualization Verification (Phase 1)
+### Cloud Monitoring (Prometheus Metrics)
 
-**4.1. Metrics in GMP**
-*   **Step 1**: Go to GCP Console -> Cloud Monitoring -> Metrics Explorer.
-*   **Step 2**: Switch to **PROMQL** mode.
-*   **Step 3**: Query for Claude Code metrics.
-    *   `claude_code_session_count_total`
-    *   `claude_code_cost_usage_total`
-    *   `claude_code_token_usage_total`
-    *   *(Note: Metrics might appear with a different prefix depending on collector mapping, we will browse if PromQL fails).*
-*   **Step 4**: Verify values are incrementing as you use Claude Code.
-
-**4.2. Logs in Cloud Logging**
-*   **Step 1**: Go to GCP Console -> Cloud Logging -> Logs Explorer.
-*   **Step 2**: Enter a query to filter for Claude Code logs.
-    *   `jsonPayload.event_name="user_prompt"` OR `jsonPayload.event_name="tool_result"`.
-*   **Step 3**: Expand a log entry and verify it contains the expected attributes (e.g., `prompt_length`, `tool_name`).
-
-### 5. Specific Metrics/Events Checklist
-Verify that *all* items from `https://code.claude.com/docs/en/monitoring-usage#available-metrics-and-events` appear:
--   [ ] Metrics: `session.count`, `lines_of_code.count`, `pull_request.count`, `commit.count`, `cost.usage`, `token.usage`, `code_edit_tool.decision`, `active_time.total`.
--   [ ] Events: `user_prompt`, `tool_result`, `api_request`.
--   [ ] Attributes: `session.id`, `app.version`, `user.account_uuid`, etc.
-
-### 6. Phase 2: Visualization (Dashboard)
-(추후 진행) 데이터 수집이 안정화된 후, 위 발견된 메트릭을 바탕으로 Terraform(`google_monitoring_dashboard`) 또는 GCP Console을 통해 영구적인 시각화 대시보드를 구축합니다.
-
-## Questions/Clarifications
-*   Confirming the exact metric names exported by Claude Code (to help finding them in GMP).
-*   Verifying if `otelcol-google` includes `googlemanagedprometheus` exporter by default.
+| Metric | Type |
+|---|---|
+| `prometheus.googleapis.com/claude_code_cost_usage_USD_total/counter` | Counter |
+| `prometheus.googleapis.com/claude_code_token_usage_tokens_total/counter` | Counter |
+| `prometheus.googleapis.com/claude_code_session_count_total/counter` | Counter |
+| `prometheus.googleapis.com/claude_code_active_time_seconds_total/counter` | Counter |
+| `prometheus.googleapis.com/claude_code_lines_of_code_count_total/counter` | Counter |
+| `prometheus.googleapis.com/claude_code_code_edit_tool_decision_total/counter` | Counter |
