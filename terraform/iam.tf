@@ -20,3 +20,12 @@ resource "google_project_iam_member" "secret_viewer" {
   role    = "roles/secretmanager.secretAccessor"
   member  = "serviceAccount:${google_service_account.collector.email}"
 }
+
+resource "google_cloud_run_service_iam_member" "invoker" {
+  location = var.region
+  service  = var.service_name
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${data.google_project.project.number}-compute@developer.gserviceaccount.com"
+}
+
+data "google_project" "project" {}

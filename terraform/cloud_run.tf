@@ -3,6 +3,11 @@ resource "google_cloud_run_service" "collector" {
   location = var.region
 
   template {
+    metadata {
+      annotations = {
+        "config-hash" = sha256(file("${path.module}/otel-config.yaml"))
+      }
+    }
     spec {
       service_account_name = google_service_account.collector.email
       
@@ -10,7 +15,8 @@ resource "google_cloud_run_service" "collector" {
         image = local.collector_image
         
         ports {
-          container_port = 4317 # gRPC
+          name           = "http1"
+          container_port = 4318
         }
         
         args = ["--config=/etc/otel/config.yaml"] # Path to mounted config

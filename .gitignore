@@ -1,0 +1,17 @@
+# Agent specific
+.agent/
+
+# Terraform
+**/.terraform/
+*.tfstate
+*.tfstate.backup
+**.tfvars
+**.tfvars.json
+.terraform.lock.hcl
+
+# Python
+__pycache__/
+*.pyc
+
+# OS specific
+.DS_Store
