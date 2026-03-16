@@ -151,7 +151,7 @@ Add the following to `~/.claude/settings.json` (or merge into your existing sett
     "OTEL_METRICS_INCLUDE_ACCOUNT_UUID": "true",
     "OTEL_LOG_USER_PROMPTS": "1",
     "OTEL_LOG_TOOL_DETAILS": "1",
-    "OTEL_METRIC_EXPORT_INTERVAL": "1000"
+    "OTEL_METRIC_EXPORT_INTERVAL": "60000"
   },
   "otelHeadersHelper": "/home/<USER>/.claude/generate_otel_headers.sh"
 }
@@ -160,7 +160,7 @@ Add the following to `~/.claude/settings.json` (or merge into your existing sett
 > **Notes**:
 > - `OTEL_EXPORTER_OTLP_PROTOCOL` must be `http/protobuf`. Claude Code uses HTTP, not gRPC.
 > - `otelHeadersHelper` must be an **absolute path**.
-> - `OTEL_METRIC_EXPORT_INTERVAL` is in milliseconds. Use `1000` for verification, increase to `60000` for production.
+> - `OTEL_METRIC_EXPORT_INTERVAL` is in milliseconds (default: `60000`). Do **NOT** set this below `60000` — lower values cause `Duplicate TimeSeries` errors in Google Managed Prometheus.
 
 ### Step 7: Restart Claude Code
 
@@ -334,6 +334,39 @@ gcloud logging read \
   --format="value(timestamp,textPayload)"
 ```
 
+## Dashboard
+
+A pre-built Cloud Monitoring dashboard is included to visualize Claude Code usage metrics.
+
+![Claude Code Usage Dashboard](images/cloud-monitoring-cc-dashboard.png)
+
+### Dashboard Widgets
+
+| Section | Widgets |
+|---|---|
+| **Summary** | Total Sessions, Total Cost (USD), Total Tokens Used, Active Time (hours) |
+| **Cost & Token Usage** | Cost Over Time, Token Usage by Type, Cost by Model, Token Usage by Model |
+| **Sessions & Activity** | Sessions Over Time, Active Time by Type |
+| **Productivity** | Lines of Code, Code Edit Decisions, Lines by Language |
+| **Cost Efficiency** | Cost per Session, Tokens per Session, Lines per Dollar, Cache Hit Ratio |
+
+### Deploy the Dashboard
+
+The dashboard is deployed automatically with `terraform apply` (via `terraform/dashboard.tf`).
+
+To deploy it separately:
+
+```bash
+cd terraform
+terraform apply -target=google_monitoring_dashboard.claude_code
+```
+
+After deployment, find it in **GCP Console > Cloud Monitoring > Dashboards > Claude Code Usage Dashboard**.
+
+### Grafana Dashboard (Optional)
+
+A Grafana-compatible dashboard is also available at [`claude-code-dashboard.json`](claude-code-dashboard.json). Import it into your Grafana instance connected to a Prometheus/GMP data source.
+
 ## Key Gotchas
 
 | Issue | Solution |
@@ -342,6 +375,7 @@ gcloud logging read \
 | `OTEL_EXPORTER_OTLP_PROTOCOL=grpc` | Change to `http/protobuf` (Claude Code uses HTTP) |
 | Data loss from cold starts | Set Cloud Run `min-instances=1` |
 | 403 authentication errors | Grant `roles/run.invoker` to the user |
+| `Duplicate TimeSeries` errors in GMP | Set `OTEL_METRIC_EXPORT_INTERVAL` to `60000` or higher |
 
 For detailed troubleshooting, see [docs/plans/troubleshooting.md](docs/plans/troubleshooting.md).
 
