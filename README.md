@@ -383,5 +383,4 @@ For detailed troubleshooting, see [docs/plans/troubleshooting.md](docs/plans/tro
 
 - [Setup Guide](docs/plans/claude-code-setup-guide.md) — Detailed Claude Code configuration guide
 - [Design](docs/plans/2026-03-14-otel-gcp-design.md) — Architecture design document
-- [Implementation Plan](docs/plans/2026-03-14-otel-gcp-implementation-plan.md) — Terraform implementation plan
 - [Troubleshooting](docs/plans/troubleshooting.md) — Issue diagnosis and resolution guide
