@@ -1,6 +1,6 @@
 # Claude Code OpenTelemetry → GCP
 
-Claude Code의 텔레메트리 데이터(메트릭, 로그)를 Google Cloud Platform으로 수집하는 구성입니다.
+Collect Claude Code telemetry data (metrics and logs) into Google Cloud Platform using an OpenTelemetry Collector deployed on Cloud Run.
 
 ## Architecture
 
@@ -20,41 +20,93 @@ Cloud Run (OTel Collector)
 
 ### Metrics (Cloud Monitoring)
 
-Metrics Explorer에서 `claude_code`로 검색:
+Search for `claude_code` in Metrics Explorer:
 
 | Metric | Description |
 |---|---|
-| `claude_code_cost_usage_USD_total` | 비용 (USD) |
-| `claude_code_token_usage_tokens_total` | 토큰 사용량 |
-| `claude_code_session_count_total` | 세션 수 |
-| `claude_code_active_time_seconds_total` | 활성 시간 |
-| `claude_code_lines_of_code_count_total` | 코드 라인 수 |
-| `claude_code_code_edit_tool_decision_total` | 코드 편집 결정 |
+| `claude_code_cost_usage_USD_total` | Cost in USD |
+| `claude_code_token_usage_tokens_total` | Token usage |
+| `claude_code_session_count_total` | Session count |
+| `claude_code_active_time_seconds_total` | Active time |
+| `claude_code_lines_of_code_count_total` | Lines of code |
+| `claude_code_code_edit_tool_decision_total` | Code edit decisions |
 
 ### Logs (Cloud Logging)
 
-`logName="projects/<PROJECT>/logs/opentelemetry-collector"` 로 검색:
+Query with `logName="projects/<PROJECT>/logs/opentelemetry-collector"`:
 
 | Event | Key Fields |
 |---|---|
-| `claude_code.user_prompt` | 프롬프트 내용, 길이, 세션 ID |
-| `claude_code.api_request` | 모델, 토큰, 비용, 응답시간 |
-| `claude_code.tool_result` | 도구명, 성공 여부, 소요시간 |
+| `claude_code.user_prompt` | Prompt content, length, session ID |
+| `claude_code.api_request` | Model, tokens, cost (USD), duration |
+| `claude_code.tool_result` | Tool name, success, duration |
 
-## Quick Start
+## Prerequisites
 
-### 1. Infrastructure (Terraform)
+- GCP project with the following APIs enabled:
+  - Cloud Run API
+  - Secret Manager API
+  - Cloud Monitoring API
+  - Cloud Logging API
+- `gcloud` CLI installed and authenticated
+- Terraform >= 1.0
+- Claude Code installed (`npm install -g @anthropic-ai/claude-code`)
+
+## Deployment Guide
+
+### Step 1: Clone the Repository
+
+```bash
+git clone https://github.com/jinseo-jang/claude-code-otel-gcp.git
+cd claude-code-otel-gcp
+```
+
+### Step 2: Configure Variables
+
+Edit `terraform/variables.tf` to set your project ID and region:
+
+```hcl
+variable "project_id" {
+  default = "your-project-id"
+}
+
+variable "region" {
+  default = "us-central1"
+}
+```
+
+### Step 3: Deploy Infrastructure
 
 ```bash
 cd terraform
 terraform init
-terraform plan
-terraform apply
+terraform plan    # Review the changes
+terraform apply   # Deploy
 ```
 
-### 2. Claude Code Setup
+This creates:
+- A **Cloud Run** service running the Google-built OTel Collector
+- A **Secret Manager** secret containing the collector config
+- A **Service Account** with `monitoring.metricWriter`, `logging.logWriter`, and `secretmanager.secretAccessor` roles
+- An **IAM binding** granting `run.invoker` to the default compute service account
 
-`~/.claude/generate_otel_headers.sh` 생성:
+Note the `collector_url` output — you'll need it for Claude Code configuration.
+
+### Step 4: Grant Access to Claude Code Users
+
+Each user running Claude Code needs `roles/run.invoker` on the collector service:
+
+```bash
+gcloud run services add-iam-policy-binding claude-code-otel-collector \
+  --region=us-central1 \
+  --project=<PROJECT_ID> \
+  --member="user:<USER_EMAIL>" \
+  --role="roles/run.invoker"
+```
+
+### Step 5: Create the Authentication Headers Script
+
+Create `~/.claude/generate_otel_headers.sh`:
 
 ```bash
 #!/bin/bash
@@ -69,9 +121,19 @@ fi
 chmod +x ~/.claude/generate_otel_headers.sh
 ```
 
-> **IMPORTANT**: 반드시 JSON 형식으로 출력해야 합니다. 평문 출력 시 텔레메트리가 전혀 전송되지 않습니다.
+> **CRITICAL**: The script **MUST** output a valid JSON object. Claude Code internally
+> calls `JSON.parse()` on the output. Plain text like `Authorization: Bearer <token>`
+> will cause a parse error and **silently disable all telemetry export**.
 
-`~/.claude/settings.json`에 추가:
+Verify it outputs valid JSON:
+
+```bash
+~/.claude/generate_otel_headers.sh | python3 -c "import sys,json; json.load(sys.stdin); print('OK')"
+```
+
+### Step 6: Configure Claude Code
+
+Add the following to `~/.claude/settings.json` (or merge into your existing settings):
 
 ```json
 {
@@ -92,43 +154,197 @@ chmod +x ~/.claude/generate_otel_headers.sh
 }
 ```
 
-### 3. IAM (Claude Code 사용자)
+> **Notes**:
+> - `OTEL_EXPORTER_OTLP_PROTOCOL` must be `http/protobuf`. Claude Code uses HTTP, not gRPC.
+> - `otelHeadersHelper` must be an **absolute path**.
+> - `OTEL_METRIC_EXPORT_INTERVAL` is in milliseconds. Use `1000` for verification, increase to `60000` for production.
+
+### Step 7: Restart Claude Code
+
+Restart Claude Code for the settings to take effect.
+
+## Verification & Testing
+
+After deployment, follow these steps to confirm the end-to-end pipeline is working.
+
+### 1. Verify Collector is Running
 
 ```bash
-gcloud run services add-iam-policy-binding claude-code-otel-collector \
-  --region=us-central1 \
-  --member="user:<YOUR_EMAIL>" \
-  --role="roles/run.invoker"
+gcloud run services describe claude-code-otel-collector \
+  --region=us-central1 --project=<PROJECT_ID> \
+  --format="value(status.conditions[0].status)"
 ```
 
-### 4. Restart & Verify
+Expected output: `True`
 
-Claude Code 재시작 후:
+### 2. Test Collector Endpoint Connectivity
 
 ```bash
-# Collector에 요청이 도착하는지 확인
+TOKEN=$(gcloud auth print-identity-token)
+
+# Test metrics endpoint
+curl -s -o /dev/null -w "metrics: HTTP %{http_code}\n" \
+  -X POST -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/x-protobuf" \
+  "https://<COLLECTOR_URL>/v1/metrics"
+
+# Test logs endpoint
+curl -s -o /dev/null -w "logs:    HTTP %{http_code}\n" \
+  -X POST -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/x-protobuf" \
+  "https://<COLLECTOR_URL>/v1/logs"
+```
+
+Expected: `HTTP 200` for both endpoints.
+
+### 3. Send a Test Log Entry
+
+```bash
+TOKEN=$(gcloud auth print-identity-token)
+curl -s -X POST \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  "https://<COLLECTOR_URL>/v1/logs" \
+  -d '{
+    "resourceLogs": [{
+      "resource": {
+        "attributes": [{"key": "service.name", "value": {"stringValue": "manual-test"}}]
+      },
+      "scopeLogs": [{
+        "logRecords": [{
+          "timeUnixNano": "'$(date +%s)000000000'",
+          "body": {"stringValue": "OTel integration test"},
+          "severityText": "INFO"
+        }]
+      }]
+    }]
+  }'
+```
+
+Then verify it appears in Cloud Logging (allow ~10 seconds for propagation):
+
+```bash
 gcloud logging read \
-  'resource.type="cloud_run_revision" AND resource.labels.service_name="claude-code-otel-collector" AND httpRequest.requestUrl:"/v1/"' \
-  --project=<PROJECT_ID> --limit=10 \
-  --format="table(timestamp,httpRequest.status,httpRequest.userAgent)"
+  'logName="projects/<PROJECT_ID>/logs/opentelemetry-collector" AND textPayload="OTel integration test"' \
+  --project=<PROJECT_ID> --limit=1 --format=json
 ```
 
-`OTel-OTLP-Exporter-JavaScript` User-Agent와 HTTP 200이 보이면 성공입니다.
+### 4. Verify Claude Code Telemetry is Flowing
+
+Run any Claude Code command, then check if the collector received requests:
+
+```bash
+gcloud logging read \
+  'resource.type="cloud_run_revision"
+   AND resource.labels.service_name="claude-code-otel-collector"
+   AND httpRequest.requestUrl:"/v1/"' \
+  --project=<PROJECT_ID> --limit=10 \
+  --format="table(timestamp,httpRequest.status,httpRequest.requestUrl,httpRequest.userAgent)"
+```
+
+Look for:
+- **User-Agent**: `OTel-OTLP-Exporter-JavaScript/*` (confirms Claude Code is sending data)
+- **Status**: `200` (confirms collector accepted the data)
+- **URLs**: `/v1/metrics` and `/v1/logs` (confirms both pipelines are active)
+
+### 5. Verify Logs in Cloud Logging
+
+```bash
+gcloud logging read \
+  'logName="projects/<PROJECT_ID>/logs/opentelemetry-collector"' \
+  --project=<PROJECT_ID> --limit=5 \
+  --format="table(timestamp,labels.\"service.name\",textPayload)"
+```
+
+Expected: entries with `service.name: claude-code` and events like `claude_code.user_prompt`, `claude_code.api_request`, `claude_code.tool_result`.
+
+### 6. Verify Metrics in Cloud Monitoring
+
+Open **GCP Console > Cloud Monitoring > Metrics Explorer** and search for:
+
+```
+prometheus.googleapis.com/claude_code
+```
+
+You should see metrics like:
+- `claude_code_cost_usage_USD_total`
+- `claude_code_token_usage_tokens_total`
+- `claude_code_session_count_total`
+
+Alternatively, verify via CLI:
+
+```bash
+gcloud monitoring time-series list \
+  --project=<PROJECT_ID> \
+  --filter='metric.type = starts_with("prometheus.googleapis.com/claude_code")' \
+  --limit=5 \
+  --format="table(metric.type,points[0].value)"
+```
+
+### Quick Health Check (All-in-One)
+
+Run this script to perform a quick end-to-end health check:
+
+```bash
+#!/bin/bash
+PROJECT_ID="<PROJECT_ID>"
+COLLECTOR_URL="<COLLECTOR_URL>"
+TOKEN=$(gcloud auth print-identity-token)
+
+echo "=== 1. Cloud Run Service Status ==="
+gcloud run services describe claude-code-otel-collector \
+  --region=us-central1 --project=$PROJECT_ID \
+  --format="value(status.conditions[0].status)"
+
+echo ""
+echo "=== 2. Endpoint Connectivity ==="
+echo -n "  /v1/metrics: "
+curl -s -o /dev/null -w "HTTP %{http_code}" -X POST \
+  -H "Authorization: Bearer $TOKEN" \
+  "$COLLECTOR_URL/v1/metrics"
+echo ""
+echo -n "  /v1/logs:    "
+curl -s -o /dev/null -w "HTTP %{http_code}" -X POST \
+  -H "Authorization: Bearer $TOKEN" \
+  "$COLLECTOR_URL/v1/logs"
+
+echo ""
+echo ""
+echo "=== 3. Recent Requests (last 5) ==="
+gcloud logging read \
+  "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"claude-code-otel-collector\" AND httpRequest.requestUrl:\"/v1/\"" \
+  --project=$PROJECT_ID --limit=5 \
+  --format="table(timestamp,httpRequest.status,httpRequest.userAgent)"
+
+echo ""
+echo "=== 4. Recent Log Entries ==="
+gcloud logging read \
+  "logName=\"projects/$PROJECT_ID/logs/opentelemetry-collector\"" \
+  --project=$PROJECT_ID --limit=3 \
+  --format="table(timestamp,labels.\"service.name\",textPayload)"
+
+echo ""
+echo "=== 5. Collector Errors (if any) ==="
+gcloud logging read \
+  "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"claude-code-otel-collector\" AND severity>=ERROR" \
+  --project=$PROJECT_ID --limit=3 \
+  --format="value(timestamp,textPayload)"
+```
 
 ## Key Gotchas
 
 | Issue | Solution |
 |---|---|
-| `otelHeadersHelper` 출력이 JSON이 아님 | `echo "{\"Authorization\": \"Bearer $TOKEN\"}"` 형식 사용 |
-| `OTEL_EXPORTER_OTLP_PROTOCOL=grpc` | `http/protobuf`로 변경 (Claude Code는 HTTP 사용) |
-| Cold start로 데이터 유실 | Cloud Run `min-instances=1` 설정 |
-| 403 인증 에러 | `roles/run.invoker` 부여 확인 |
+| `otelHeadersHelper` output is not JSON | Use `echo "{\"Authorization\": \"Bearer $TOKEN\"}"` |
+| `OTEL_EXPORTER_OTLP_PROTOCOL=grpc` | Change to `http/protobuf` (Claude Code uses HTTP) |
+| Data loss from cold starts | Set Cloud Run `min-instances=1` |
+| 403 authentication errors | Grant `roles/run.invoker` to the user |
 
-자세한 트러블슈팅은 [docs/plans/troubleshooting.md](docs/plans/troubleshooting.md)를 참조하세요.
+For detailed troubleshooting, see [docs/plans/troubleshooting.md](docs/plans/troubleshooting.md).
 
 ## Docs
 
-- [Setup Guide](docs/plans/claude-code-setup-guide.md) — Claude Code 설정 상세 가이드
-- [Design](docs/plans/2026-03-14-otel-gcp-design.md) — 아키텍처 설계 문서
-- [Implementation Plan](docs/plans/2026-03-14-otel-gcp-implementation-plan.md) — Terraform 구현 계획
-- [Troubleshooting](docs/plans/troubleshooting.md) — 문제 해결 가이드
+- [Setup Guide](docs/plans/claude-code-setup-guide.md) — Detailed Claude Code configuration guide
+- [Design](docs/plans/2026-03-14-otel-gcp-design.md) — Architecture design document
+- [Implementation Plan](docs/plans/2026-03-14-otel-gcp-implementation-plan.md) — Terraform implementation plan
+- [Troubleshooting](docs/plans/troubleshooting.md) — Issue diagnosis and resolution guide
