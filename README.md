@@ -63,22 +63,25 @@ cd claude-code-otel-gcp
 
 ### Step 2: Configure Variables
 
-Edit `terraform/variables.tf` to set your project ID and region:
+Copy the example tfvars file and set your project ID:
+
+```bash
+cd terraform
+cp terraform.tfvars.example terraform.tfvars
+```
+
+Edit `terraform.tfvars`:
 
 ```hcl
-variable "project_id" {
-  default = "your-project-id"
-}
-
-variable "region" {
-  default = "us-central1"
-}
+project_id = "your-gcp-project-id"
+# region   = "us-central1"        # optional, defaults to us-central1
 ```
+
+> **Note**: `terraform.tfvars` is git-ignored to prevent project-specific information from being committed.
 
 ### Step 3: Deploy Infrastructure
 
 ```bash
-cd terraform
 terraform init
 terraform plan    # Review the changes
 terraform apply   # Deploy

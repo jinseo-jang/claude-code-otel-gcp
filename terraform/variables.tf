@@ -1,14 +1,16 @@
 variable "project_id" {
-  type    = string
-  default = "duper-project-1"
+  description = "GCP project ID"
+  type        = string
 }
 
 variable "region" {
-  type    = string
-  default = "us-central1"
+  description = "GCP region for Cloud Run deployment"
+  type        = string
+  default     = "us-central1"
 }
 
 variable "service_name" {
-  type    = string
-  default = "claude-code-otel-collector"
+  description = "Cloud Run service name for the OTel Collector"
+  type        = string
+  default     = "claude-code-otel-collector"
 }
