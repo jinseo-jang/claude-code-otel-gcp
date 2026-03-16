@@ -41,7 +41,9 @@
               "prometheusQuery": "sum(increase(claude_code_session_count_total[1h]))",
               "unitOverride": ""
             },
-            "blankView": {},
+            "sparkChartView": {
+              "sparkChartType": "SPARK_LINE"
+            },
             "thresholds": []
           }
         }
@@ -59,7 +61,9 @@
               "prometheusQuery": "sum(increase(claude_code_cost_usage_USD_total[1h]))",
               "unitOverride": ""
             },
-            "blankView": {},
+            "sparkChartView": {
+              "sparkChartType": "SPARK_LINE"
+            },
             "thresholds": [
               {
                 "label": "Warning",
@@ -92,7 +96,9 @@
               "prometheusQuery": "sum(increase(claude_code_token_usage_tokens_total[1h]))",
               "unitOverride": ""
             },
-            "blankView": {},
+            "sparkChartView": {
+              "sparkChartType": "SPARK_LINE"
+            },
             "thresholds": []
           }
         }
@@ -110,7 +116,9 @@
               "prometheusQuery": "sum(increase(claude_code_active_time_seconds_total[1h])) / 3600",
               "unitOverride": ""
             },
-            "blankView": {},
+            "sparkChartView": {
+              "sparkChartType": "SPARK_LINE"
+            },
             "thresholds": []
           }
         }
