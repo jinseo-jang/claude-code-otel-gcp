@@ -13,7 +13,7 @@
 **Files:** `terraform/provider.tf`, `terraform/variables.tf`, `terraform/locals.tf`
 
 - Google provider with `~> 5.0`
-- Variables: `project_id` (default: `duper-project-1`), `region` (default: `us-central1`), `service_name` (default: `claude-code-otel-collector`)
+- Variables: `project_id` (required, no default), `region` (default: `us-central1`), `service_name` (default: `claude-code-otel-collector`)
 - Locals: `collector_image` pinned to `otelcol-google:0.144.0`
 
 ### Task 2: Secret Manager & Collector Config
