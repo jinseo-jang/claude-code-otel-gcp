@@ -187,6 +187,11 @@ curl -s -X POST "${ISSUER_URI}/v1/device/authorize" \
 ```
 사용자가 브라우저에서 승인을 완료하면 Okta는 `access_token`과 함께 `refresh_token`을 반환합니다.
 
+> [!IMPORTANT]
+> **Okta 서버 측 `Refresh Token` Grant Type 필수 활성화**:  
+> 클라이언트가 `scope=offline_access`를 요청하더라도, Okta 관리자 콘솔의 해당 애플리케이션 설정에서 **`Refresh Token`** Grant Type이 켜져 있지 않으면 Okta는 오류를 반환하지 않고 **리프레시 토큰을 조용히 생략한 채 액세스 토큰만 발급**합니다.  
+> 이 경우 최초 1시간은 정상 동작하지만 만료 후 백그라운드 자동 갱신이 불가능하여 매 1시간마다 브라우저 재로그인이 요구됩니다. 반드시 Okta 콘솔의 Native App 설정에서 **`Refresh Token`** 체크박스를 활성화해야 합니다.
+
 ### 3-2. 동시성 제어(`flock`) 및 이중 검사 락킹 (Double-Checked Locking)
 Claude Code 프로세스나 여러 터미널 탭이 동시에 텔레메트리를 내보낼 때 여러 프로세스가 같은 리프레시 토큰으로 동시에 갱신을 요청할 수 있습니다. Okta의 **Refresh Token Reuse Detection** 정책은 동일한 리프레시 토큰의 중복 사용을 탈취 시도로 간주하여 사용자의 전체 세션을 즉시 무효화합니다.
 
@@ -296,8 +301,8 @@ idp-federation/
 1. **Applications** > **Applications** > **Create App Integration**을 클릭합니다.
 2. **OIDC - OpenID Connect** > **Native Application**을 선택합니다.
 3. **Grant types**:
-   - **`Device Authorization`** 체크 (필수)
-   - **`Refresh Token`** 체크 (백그라운드 자동 갱신 필수)
+   - **`Device Authorization`** 체크 (필수: CLI 디바이스 브라우저 인증 지원)
+   - **`Refresh Token`** 체크 (⚠️ **절대 필수**: 미체크 시 Okta가 리프레시 토큰을 발급하지 않아 1시간마다 브라우저 재로그인이 반복됨)
 4. **Assignments**: `claude-code-users` 그룹(또는 조직 전체)에 할당합니다.
 5. 저장 후 발급된 **`Client ID`**를 복사합니다.
 

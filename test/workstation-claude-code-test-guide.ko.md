@@ -109,6 +109,12 @@ cd claude-code-otel-gcp
 
 ## 4. Okta 디바이스 인증 (`login_okta_device.sh`)
 
+> [!IMPORTANT]
+> **Okta 앱 설정 필수 요건 (Refresh Token 그랜트 활성화)**:  
+> Okta 관리자 콘솔에서 해당 앱(Native Application) 생성 시 **Grant type**에 **`Refresh Token`** 체크박스가 반드시 켜져 있어야 합니다.  
+> 만약 이 옵션을 켜지 않으면 Okta가 에러를 발생시키지 않고 조용히 1시간 유효기간의 액세스 토큰만 발급하고 리프레시 토큰을 건너뜁니다. 그 결과 1시간 후 토큰이 만료되었을 때 백그라운드 자동 갱신이 동작하지 않아 매번 브라우저 로그인을 다시 거쳐야 합니다.  
+> - **설정 위치**: Okta Admin Console > **Applications** > **Applications** > 해당 App > **General** 탭 > **General Settings** (`Edit`) > **Grant type** 목록에서 **`Refresh Token`** 체크 후 **Save**.
+
 Okta 디바이스 인증 플로우를 통해 액세스 토큰 및 리프레시 토큰을 발급받아 캐시합니다:
 
 ```bash
@@ -327,7 +333,7 @@ curl -s -H "Authorization: Bearer $(gcloud auth print-access-token)" \
 ## 9. 장애 유형별 점검 및 해결 가이드 (Troubleshooting)
 
 ### 9-1. Okta 리프레시 토큰 그랜트 타입 활성화 절차
-만약 `test_token_pipeline.sh`의 Step 6 실행 중 다음 에러가 발생한다면:
+토큰 발급 1시간 후 백그라운드 자동 갱신이 되지 않고 브라우저 로그인이 계속 다시 뜨거나, `test_token_pipeline.sh`의 Step 6 실행 중 다음 에러가 발생한다면:
 ```text
 {"error":"unauthorized_client","error_description":"The client is not authorized to use the provided grant type. Configured grant types: [authorization_code, urn:ietf:params:oauth:grant-type:device_code]."}
 ```
@@ -349,6 +355,7 @@ curl -s -H "Authorization: Bearer $(gcloud auth print-access-token)" \
 
 | 증상 | 원인 분석 | 해결 조치 |
 |---|---|---|
+| 1시간 후 CLI 실행 시 브라우저 로그인이 다시 요구됨 | Okta 앱 설정에서 `Refresh Token` 그랜트가 비활성화되어 리프레시 토큰 미발급 | Okta 콘솔 Applications > 해당 App > General > Grant type에서 `Refresh Token` 체크 후 저장하고 1회 재인증 진행 |
 | Claude Code 실행 시 `Permission 'aiplatform.endpoints.predict' denied` 발생 | 중계 SA에 Vertex AI 역할 누락 | `idp-federation/terraform/iam.tf`에 `roles/aiplatform.user`가 선언되어 있는지 확인하고 `terraform apply`를 실행합니다. |
 | Claude Code 실행 시 `Missing or invalid ADC` 오류 | ADC 파일 누락 또는 스키마 오류 | `~/.config/gcloud/application_default_credentials.json` 파일의 `type: external_account` 여부와 `generateAccessToken` 경로를 확인하고 `chmod 600`을 부여합니다. |
 | Cloud Run `/v1/metrics` 호출 시 403 Forbidden | 중계 SA에 invoker 권한 누락 | 중계 SA(`claude-code-otel-invoker`)에 `roles/run.invoker` 권한이 부여되어 있는지 점검합니다. |

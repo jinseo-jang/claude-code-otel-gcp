@@ -111,6 +111,12 @@ cd claude-code-otel-gcp
 
 ## 4. Okta Device Authentication (`login_okta_device.sh`)
 
+> [!IMPORTANT]
+> **Essential Okta App Setting (Enable Refresh Token Grant Type)**:  
+> When creating or configuring the Native Application in the Okta Admin Console, the **`Refresh Token`** grant type **must be checked**.  
+> If this option is omitted, Okta will issue a 1-hour access token without error, but will silently skip issuing a refresh token. As a result, once the access token expires after 60 minutes, background auto-refresh cannot occur and the CLI will prompt for browser authentication repeatedly.  
+> - **Navigation**: Okta Admin Console > **Applications** > **Applications** > [Your App] > **General** tab > **General Settings** (`Edit`) > **Grant type** > Check **`Refresh Token`** > **Save**.
+
 Authenticate with Okta to obtain and cache your signed JWT access token and refresh token:
 
 ```bash
@@ -332,7 +338,7 @@ curl -s -H "Authorization: Bearer $(gcloud auth print-access-token)" \
 ## 9. Troubleshooting Reference
 
 ### 9-1. Okta Refresh Token Grant Type Configuration
-If Step 6 of `test_token_pipeline.sh` reports:
+If browser login is prompted repeatedly after 1 hour instead of background auto-refreshing, or if Step 6 of `test_token_pipeline.sh` reports:
 ```text
 {"error":"unauthorized_client","error_description":"The client is not authorized to use the provided grant type. Configured grant types: [authorization_code, urn:ietf:params:oauth:grant-type:device_code]."}
 ```
@@ -355,6 +361,7 @@ If Step 6 of `test_token_pipeline.sh` reports:
 
 | Symptom | Cause | Resolution |
 |---|---|---|
+| Repeated browser login prompted after 1 hour | Okta App lacks 'Refresh Token' grant type; refresh_token omitted | In Okta Admin Console (Applications > [App] > General > Grant type), check 'Refresh Token' and save. Re-authenticate once to store refresh_token. |
 | Claude Code fails with `Permission 'aiplatform.endpoints.predict' denied` | Relay SA lacks Vertex AI IAM role | In `idp-federation/terraform/iam.tf`, ensure `roles/aiplatform.user` is bound to `claude-code-otel-invoker` and applied via `terraform apply`. |
 | Claude Code reports `Missing or invalid ADC` | ADC file missing or invalid schema | Inspect `~/.config/gcloud/application_default_credentials.json`. Verify `type: external_account` and `service_account_impersonation_url` points to `:generateAccessToken`. Set `chmod 600`. |
 | Cloud Run returns `403 Forbidden` on `/v1/metrics` | Relay SA lacks Cloud Run Invoker role | Ensure `roles/run.invoker` is granted to `claude-code-otel-invoker` on `claude-code-otel-collector`. |

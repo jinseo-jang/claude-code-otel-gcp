@@ -184,7 +184,10 @@ if [[ -n "${OKTA_CLIENT_ID:-}" && "${OKTA_CLIENT_ID}" != *"<"* ]]; then
     if [ -n "$RECEIVED_TOKEN" ]; then
       inspect_and_save_token "$RECEIVED_TOKEN" "$REFRESH_TOKEN"
       if [ -z "$REFRESH_TOKEN" ]; then
-        echo "  [WARN] No refresh_token returned by Okta. Verify offline_access scope in Okta application."
+        echo "  [WARN] No refresh_token returned by Okta!"
+        echo "         Ensure 'Refresh Token' grant type is enabled in the Okta Admin Console:"
+        echo "         Applications > Applications > [Your App] > General > General Settings (Edit) > Grant type > Check [Refresh Token]"
+        echo "         Without this, background token auto-refresh is disabled and re-login will be required after 1 hour."
       fi
       exit 0
     fi

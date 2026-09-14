@@ -187,6 +187,12 @@ curl -s -X POST "${ISSUER_URI}/v1/device/authorize" \
 ```
 Upon browser approval, Okta returns both an `access_token` and a `refresh_token`.
 
+> [!IMPORTANT]
+> **Mandatory Server-Side `Refresh Token` Grant Configuration**:  
+> Even when the client requests `scope=offline_access`, Okta will silently omit issuing a refresh token without returning an error if the **`Refresh Token`** grant type is disabled on the Okta Application.  
+> Without a refresh token, initial authentication works for 60 minutes, but subsequent background auto-refresh fails, forcing developers to re-authenticate via browser every hour.  
+> You must ensure **`Refresh Token`** is enabled under **Applications** > **Applications** > [Your App] > **General** > **Grant type** in the Okta Admin Console.
+
 ### 3-2. Concurrency Locking (`flock`) & Double-Checked Locking
 Because Claude Code may invoke the telemetry helper script concurrently across terminal tabs or background telemetry batches, multiple processes could attempt token renewal simultaneously. Okta's **Refresh Token Reuse Detection** flags concurrent requests using the same refresh token as a potential compromise and invalidates the user's entire session.
 
@@ -296,8 +302,8 @@ Parameters template:
 1. Navigate to **Applications** > **Applications** > **Create App Integration**.
 2. Select **OIDC - OpenID Connect** > **Native Application**.
 3. **Grant types**:
-   - Check **`Device Authorization`** (Required)
-   - Check **`Refresh Token`** (Required for background token refresh)
+   - Check **`Device Authorization`** (Required for CLI device browser authentication)
+   - Check **`Refresh Token`** (⚠️ **Crucial**: Omitting this causes Okta to drop refresh tokens, forcing re-login every hour)
 4. Under **Assignments**, grant access to `claude-code-users` (or all organization users).
 5. Save and copy the **`Client ID`**.
 
