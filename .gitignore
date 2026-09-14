@@ -1,5 +1,14 @@
 # Agent specific
 .agent/
+.agents/
+ORIGINAL_REQUEST.md
+
+# Credentials & Tokens (Strict Security Isolation)
+.corporate_idp/
+*.token
+*refresh_token*
+*credential*.json
+application_default_credentials.json
 
 # Terraform
 **/.terraform/
@@ -8,6 +17,7 @@
 **.tfvars
 **.tfvars.json
 .terraform.lock.hcl
+.terraform.tfstate.lock.info
 
 # Python
 __pycache__/
@@ -15,3 +25,4 @@ __pycache__/
 
 # OS specific
 .DS_Store
+

@@ -2,13 +2,41 @@
 
 Collect Claude Code telemetry data (metrics and logs) into Google Cloud Platform using an OpenTelemetry Collector deployed on Cloud Run.
 
+> [!TIP]
+> **Unified Enterprise IdP (Okta) Authentication Available (Zero-`gcloud`)**:  
+> You can authenticate developer workstations with a single Okta SSO session that grants both **Vertex AI Claude model invocations** (via WIF ADC) and **Cloud Run OpenTelemetry telemetry forwarding** (via OTel headers helper) without issuing individual GCP IAM accounts or managing persistent local `gcloud` sessions.  
+> See the **[Okta IdP Federation Guide (English)](idp-federation/README.md)** | **[Okta IdP 연동 가이드 (한국어)](idp-federation/README.ko.md)** and the **[Cloud Workstations Test Guide (English)](test/workstation-claude-code-test-guide.md)** | **[Cloud Workstations 테스트 가이드 (한국어)](test/workstation-claude-code-test-guide.ko.md)**.
+
 ## Architecture
+
+This project supports two operational authentication architectures:
+
+### 1. Unified Corporate IdP (Okta) Model (Enterprise Zero-`gcloud`)
+A single Okta SSO session powers both model execution and telemetry export via Workload Identity Federation (WIF):
+- **Path 1 (Model Invocations)**: Claude Code (`CLAUDE_CODE_USE_VERTEX=1`) reads WIF Application Default Credentials (`application_default_credentials.json`, `external_account`) → exchanges Okta JWT via GCP STS (Hop 1) → impersonates Relay Service Account via `generateAccessToken` (`roles/aiplatform.user`) → calls Vertex AI Claude 3.5 / 3.7 Sonnet in `us-east5`.
+- **Path 2 (Telemetry Ingestion)**: Claude Code executes `generate_otel_headers.sh` → checks expiration with 300s buffer → auto-refreshes token via Okta `/v1/token` under `flock` mutual exclusion → exchanges Okta token via GCP STS (Hop 1) → generates Google ID token via `generateIdToken` (`roles/run.invoker`) → exports OTLP/HTTP telemetry to private Cloud Run Collector (HTTP 200).
+
+```
+[Developer Workstation (Cloud Workstations / Local)]
+         │
+         ├── Path 1: WIF ADC (~/.config/gcloud/application_default_credentials.json)
+         │           └─► GCP STS (Hop 1) ─► SA generateAccessToken ─► Vertex AI (Claude Models)
+         │
+         └── Path 2: OTel Headers Helper (~/.claude/generate_otel_headers.sh)
+                     └─► flock Auto-Refresh ─► GCP STS ─► SA generateIdToken ─► Cloud Run (Collector)
+                                                                                     │
+                                                                   ├──► Cloud Monitoring (GMP)
+                                                                   └──► Cloud Logging
+```
+
+### 2. Standard Local Developer Model (gcloud CLI)
+Direct local development using developer `gcloud` login:
 
 ```
 Claude Code CLI
     │
-    │ OTLP/HTTP (protobuf)
-    │ + IAM Identity Token
+    │ OTLP/HTTP (protobuf / json)
+    │ + IAM Identity Token (`gcloud auth print-identity-token`)
     ▼
 Cloud Run (OTel Collector)
     │
@@ -384,3 +412,8 @@ For detailed troubleshooting, see [docs/plans/troubleshooting.md](docs/plans/tro
 - [Setup Guide](docs/plans/claude-code-setup-guide.md) — Detailed Claude Code configuration guide
 - [Design](docs/plans/2026-03-14-otel-gcp-design.md) — Architecture design document
 - [Troubleshooting](docs/plans/troubleshooting.md) — Issue diagnosis and resolution guide
+- [Okta IdP Federation Guide (English)](idp-federation/README.md) — Enterprise IdP (Okta) Workload Identity Federation architecture and setup guide
+- [Okta IdP 연동 가이드 (한국어)](idp-federation/README.ko.md) — 기업 IdP(Okta) 기반 Workload Identity Federation 아키텍처 및 설정 가이드
+- [IdP Federation Design Spec](docs/plans/2026-09-14-idp-federated-auth-design.md) — Detailed IdP federation architectural design specification
+- [Cloud Workstations Test Guide (English)](test/workstation-claude-code-test-guide.md) — Step-by-step test guide and diagnostic scripts
+- [Cloud Workstations 테스트 가이드 (한국어)](test/workstation-claude-code-test-guide.ko.md) — Cloud Workstations 환경 테스트 가이드 및 진단 스크립트

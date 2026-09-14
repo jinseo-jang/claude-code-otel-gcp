@@ -1,0 +1,9 @@
+project_id        = "your-gcp-project-id"
+region            = "us-central1"
+pool_id           = "claude-code-pool"
+provider_id       = "okta-oidc-provider"
+issuer_uri        = "https://example.okta.com/oauth2/default"
+allowed_audiences = ["api://default"]
+authorized_group  = "claude-code-users"
+service_name      = "claude-code-otel-collector"
+invoker_sa_name   = "claude-code-otel-invoker"
